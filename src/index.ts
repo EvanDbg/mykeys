@@ -134,10 +134,10 @@ export default {
 
     if (path === '/webhook' && req.method === 'POST') {
       const u: TelegramUpdate = await req.json();
-      if (u.callback_query) { handleCallback(env, u.callback_query); return new Response('OK'); }
+      if (u.callback_query) { await handleCallback(env, u.callback_query); return new Response('OK'); }
       const m = u.message;
       if (!m?.text || !m.from || m.from.id.toString() !== env.ALLOWED_USER_ID) return new Response('OK');
-      handleMessage(env, m.chat.id, m.from.id, m.text.trim());
+      await handleMessage(env, m.chat.id, m.from.id, m.text.trim());
       return new Response('OK');
     }
     return new Response('Not Found', { status: 404 });
@@ -163,15 +163,18 @@ export default {
 
 // ========== 消息处理 ==========
 async function handleMessage(env: Env, chatId: number, uid: number, text: string) {
-  if (text === '/start' || text === '/help') return send(env, chatId, HELP);
-  if (text === '/menu') return sendKb(env, chatId, '🔐 选择操作：', [
-    [{ text: '📋 全部', callback_data: 'm_list' }, { text: '🔍 搜索', callback_data: 'm_search' }],
-    [{ text: '⏰ 到期', callback_data: 'm_exp' }, { text: '💾 备份', callback_data: 'm_backup' }]
-  ]);
-  if (text === '/list') return showList(env, chatId);
-  if (text === '/expiring') return showExpiring(env, chatId);
-  if (text === '/backup') return sendBackup(env, chatId);
-  if (text === '/cancel') { clearSession(env, uid); return send(env, chatId, '✅ 已取消'); }
+  if (text === '/start' || text === '/help') { await send(env, chatId, HELP); return; }
+  if (text === '/menu') {
+    await sendKb(env, chatId, '🔐 选择操作：', [
+      [{ text: '📋 全部', callback_data: 'm_list' }, { text: '🔍 搜索', callback_data: 'm_search' }],
+      [{ text: '⏰ 到期', callback_data: 'm_exp' }, { text: '💾 备份', callback_data: 'm_backup' }]
+    ]);
+    return;
+  }
+  if (text === '/list') { await showList(env, chatId); return; }
+  if (text === '/expiring') { await showExpiring(env, chatId); return; }
+  if (text === '/backup') { await sendBackup(env, chatId); return; }
+  if (text === '/cancel') { await clearSession(env, uid); await send(env, chatId, '✅ 已取消'); return; }
 
   const session = await getSession(env, uid);
   if (session.step !== 'idle') return handleFlow(env, chatId, uid, text, session);
@@ -179,61 +182,66 @@ async function handleMessage(env: Env, chatId: number, uid: number, text: string
   // #存 长文本
   if (text.startsWith('#存')) {
     const nl = text.indexOf('\n');
-    if (nl === -1) return send(env, chatId, '❓ 格式：#存 名称\\n内容');
+    if (nl === -1) { await send(env, chatId, '❓ 格式：#存 名称\\n内容'); return; }
     let name = text.slice(3, nl).trim(), exp: string | null = null;
     const dm = name.match(/@([\d\-\/]+)$/);
     if (dm) { exp = parseDate(dm[1]); name = name.slice(0, dm.index).trim(); }
     const content = cleanText(text.slice(nl + 1));
-    if (!name || !content) return send(env, chatId, '❓ 名称和内容不能为空');
+    if (!name || !content) { await send(env, chatId, '❓ 名称和内容不能为空'); return; }
     await env.DB.prepare('INSERT INTO secrets(name,site,password,expires_at)VALUES(?,?,?,?)').bind(name, 'raw', await encrypt(content, env.ENCRYPT_KEY), exp).run();
-    return send(env, chatId, `✅ 已保存「${name}」${exp ? '\n📅 ' + exp : ''}`);
+    await send(env, chatId, `✅ 已保存「${name}」${exp ? '\n📅 ' + exp : ''}`);
+    return;
   }
 
   // #到期 设置
   if (text.startsWith('#到期 ')) {
     const m = text.match(/^#到期\s+(\d+)\s+(.+)$/);
-    if (!m) return send(env, chatId, '❓ 格式：#到期 ID 日期');
+    if (!m) { await send(env, chatId, '❓ 格式：#到期 ID 日期'); return; }
     const [, id, d] = m;
-    if (d === '无') { await env.DB.prepare('UPDATE secrets SET expires_at=NULL WHERE id=?').bind(+id).run(); return send(env, chatId, '✅ 已取消'); }
+    if (d === '无') { await env.DB.prepare('UPDATE secrets SET expires_at=NULL WHERE id=?').bind(+id).run(); await send(env, chatId, '✅ 已取消'); return; }
     const exp = parseDate(d);
-    if (!exp) return send(env, chatId, '❓ 日期格式不对');
+    if (!exp) { await send(env, chatId, '❓ 日期格式不对'); return; }
     await env.DB.prepare('UPDATE secrets SET expires_at=? WHERE id=?').bind(exp, +id).run();
-    return send(env, chatId, `✅ 到期：${exp}`);
+    await send(env, chatId, `✅ 到期：${exp}`);
+    return;
   }
 
   // 搜索
   if (!text.includes(' ') && text.length <= 20) {
     const r = await env.DB.prepare('SELECT id,name,site FROM secrets WHERE name LIKE ? OR site LIKE ? LIMIT 5').bind(`%${text}%`, `%${text}%`).all<SecretRow>();
     if (r.results?.length) {
-      if (r.results.length === 1) return showDetail(env, chatId, r.results[0].id);
-      return sendKb(env, chatId, `🔍 找到 ${r.results.length} 条：`, r.results.map(x => [{ text: `${x.name} (${x.site})`, callback_data: `v_${x.id}` }]));
+      if (r.results.length === 1) { await showDetail(env, chatId, r.results[0].id); return; }
+      await sendKb(env, chatId, `🔍 找到 ${r.results.length} 条：`, r.results.map(x => [{ text: `${x.name} (${x.site})`, callback_data: `v_${x.id}` }]));
+      return;
     }
   }
 
   // 新建
   await setSession(env, uid, { step: 'ask_site', name: text });
-  send(env, chatId, `📝 保存「${text}」\n\n🌐 请输入网站：`);
+  await send(env, chatId, `📝 保存「${text}」\n\n🌐 请输入网站：`);
 }
 
 // ========== 会话流程 ==========
 async function handleFlow(env: Env, chatId: number, uid: number, text: string, s: SessionData) {
-  if (s.step === 'ask_site') { s.site = text; s.step = 'ask_account'; await setSession(env, uid, s); return send(env, chatId, '👤 请输入账号：'); }
-  if (s.step === 'ask_account') { s.account = text; s.step = 'ask_password'; await setSession(env, uid, s); return send(env, chatId, '🔑 请输入密码：'); }
+  if (s.step === 'ask_site') { s.site = text; s.step = 'ask_account'; await setSession(env, uid, s); await send(env, chatId, '👤 请输入账号：'); return; }
+  if (s.step === 'ask_account') { s.account = text; s.step = 'ask_password'; await setSession(env, uid, s); await send(env, chatId, '🔑 请输入密码：'); return; }
   if (s.step === 'ask_password') {
     s.password = text; s.step = 'ask_expiry'; await setSession(env, uid, s);
-    return sendKb(env, chatId, '📅 设置到期？', [
+    await sendKb(env, chatId, '📅 设置到期？', [
       [{ text: '不需要', callback_data: 'e_0' }],
       [{ text: '7天', callback_data: 'e_7' }, { text: '30天', callback_data: 'e_30' }, { text: '90天', callback_data: 'e_90' }],
       [{ text: '自定义', callback_data: 'e_c' }]
     ]);
+    return;
   }
   if (s.step === 'ask_expiry') {
     const exp = parseDate(text);
-    if (!exp) return send(env, chatId, '❓ 格式：2025-12-31 或 12-31');
+    if (!exp) { await send(env, chatId, '❓ 格式：2025-12-31 或 12-31'); return; }
     s.expiresAt = exp; s.step = 'ask_extra'; await setSession(env, uid, s);
-    return sendKb(env, chatId, `📅 ${exp}\n\n📝 添加备注？`, [[{ text: '不需要，保存', callback_data: 'x_0' }]]);
+    await sendKb(env, chatId, `📅 ${exp}\n\n📝 添加备注？`, [[{ text: '不需要，保存', callback_data: 'x_0' }]]);
+    return;
   }
-  if (s.step === 'ask_extra') { s.extra = text; return saveFinish(env, chatId, uid, s); }
+  if (s.step === 'ask_extra') { s.extra = text; await saveFinish(env, chatId, uid, s); return; }
 }
 
 async function saveFinish(env: Env, chatId: number, uid: number, s: SessionData) {
@@ -246,44 +254,46 @@ async function saveFinish(env: Env, chatId: number, uid: number, s: SessionData)
     env.DB.prepare('INSERT INTO secrets(name,site,account,password,extra,expires_at)VALUES(?,?,?,?,?,?)').bind(s.name, s.site, encA, encP, encX, s.expiresAt || null).run(),
     clearSession(env, uid)
   ]);
-  send(env, chatId, `✅ 保存成功！\n\n🏷️ ${s.name}\n🌐 ${s.site}\n👤 ${s.account}\n🔑 ******${s.extra ? '\n📝 ' + s.extra : ''}${s.expiresAt ? '\n📅 ' + s.expiresAt : ''}`);
+  await send(env, chatId, `✅ 保存成功！\n\n🏷️ ${s.name}\n🌐 ${s.site}\n👤 ${s.account}\n🔑 ******${s.extra ? '\n📝 ' + s.extra : ''}${s.expiresAt ? '\n📅 ' + s.expiresAt : ''}`);
 }
 
 // ========== 回调处理 ==========
 async function handleCallback(env: Env, cb: NonNullable<TelegramUpdate['callback_query']>) {
   const chatId = cb.message?.chat.id, uid = cb.from.id, d = cb.data;
   if (!chatId || !d) return;
-  tg(env, 'answerCallbackQuery', { callback_query_id: cb.id });
+  await tg(env, 'answerCallbackQuery', { callback_query_id: cb.id });
   if (uid.toString() !== env.ALLOWED_USER_ID) return;
 
   // 菜单
-  if (d === 'm_list') return showList(env, chatId);
-  if (d === 'm_exp') return showExpiring(env, chatId);
-  if (d === 'm_backup') return sendBackup(env, chatId);
-  if (d === 'm_search') return send(env, chatId, '🔍 直接发送关键词搜索');
+  if (d === 'm_list') { await showList(env, chatId); return; }
+  if (d === 'm_exp') { await showExpiring(env, chatId); return; }
+  if (d === 'm_backup') { await sendBackup(env, chatId); return; }
+  if (d === 'm_search') { await send(env, chatId, '🔍 直接发送关键词搜索'); return; }
 
   // 到期选择
   if (d.startsWith('e_')) {
     const s = await getSession(env, uid);
     if (s.step !== 'ask_expiry') return;
-    if (d === 'e_c') return send(env, chatId, '📅 请输入日期（如 2025-12-31）：');
+    if (d === 'e_c') { await send(env, chatId, '📅 请输入日期（如 2025-12-31）：'); return; }
     const days = +d.slice(2);
     s.expiresAt = days ? new Date(Date.now() + days * 864e5).toISOString().slice(0, 10) : null;
     s.step = 'ask_extra'; await setSession(env, uid, s);
-    return sendKb(env, chatId, `${s.expiresAt ? '📅 ' + s.expiresAt + '\n\n' : ''}📝 添加备注？`, [[{ text: '不需要，保存', callback_data: 'x_0' }]]);
+    await sendKb(env, chatId, `${s.expiresAt ? '📅 ' + s.expiresAt + '\n\n' : ''}📝 添加备注？`, [[{ text: '不需要，保存', callback_data: 'x_0' }]]);
+    return;
   }
 
   // 备注
-  if (d === 'x_0') { const s = await getSession(env, uid); if (s.step === 'ask_extra') { s.extra = null; return saveFinish(env, chatId, uid, s); } }
+  if (d === 'x_0') { const s = await getSession(env, uid); if (s.step === 'ask_extra') { s.extra = null; await saveFinish(env, chatId, uid, s); } return; }
 
   // 查看
-  if (d.startsWith('v_')) return showDetail(env, chatId, +d.slice(2));
+  if (d.startsWith('v_')) { await showDetail(env, chatId, +d.slice(2)); return; }
 
   // 删除模式
   if (d === 'del_mode') {
     const r = await env.DB.prepare('SELECT id,name,site FROM secrets ORDER BY created_at DESC').all<SecretRow>();
-    if (!r.results?.length) return send(env, chatId, '📭 没有记录');
-    return sendKb(env, chatId, '🗑️ 点击删除：', r.results.map(x => [{ text: `❌ ${x.name}`, callback_data: `d_${x.id}` }]));
+    if (!r.results?.length) { await send(env, chatId, '📭 没有记录'); return; }
+    await sendKb(env, chatId, '🗑️ 点击删除：', r.results.map(x => [{ text: `❌ ${x.name}`, callback_data: `d_${x.id}` }]));
+    return;
   }
 
   // 删除
@@ -291,30 +301,31 @@ async function handleCallback(env: Env, cb: NonNullable<TelegramUpdate['callback
     const id = +d.slice(2);
     const r = await env.DB.prepare('SELECT name FROM secrets WHERE id=?').bind(id).first<SecretRow>();
     await env.DB.prepare('DELETE FROM secrets WHERE id=?').bind(id).run();
-    return send(env, chatId, `🗑️ 已删除「${r?.name || id}」`);
+    await send(env, chatId, `🗑️ 已删除「${r?.name || id}」`);
+    return;
   }
 
   // 设置到期
-  if (d.startsWith('s_')) return send(env, chatId, `📅 回复：#到期 ${d.slice(2)} 2025-12-31\n取消：#到期 ${d.slice(2)} 无`);
+  if (d.startsWith('s_')) { await send(env, chatId, `📅 回复：#到期 ${d.slice(2)} 2025-12-31\n取消：#到期 ${d.slice(2)} 无`); return; }
 }
 
 // ========== 列表/详情/备份 ==========
 async function showList(env: Env, chatId: number) {
   const r = await env.DB.prepare('SELECT id,name,site,expires_at FROM secrets ORDER BY created_at DESC').all<SecretRow>();
-  if (!r.results?.length) return send(env, chatId, '📭 没有数据');
+  if (!r.results?.length) { await send(env, chatId, '📭 没有数据'); return; }
   const btns = r.results.map(x => {
     let l = `${x.name} (${x.site})`;
     if (x.expires_at) { const d = Math.ceil((new Date(x.expires_at).getTime() - Date.now()) / 864e5); if (d <= 0) l = '⚠️ ' + l; else if (d <= 7) l = '🔴 ' + l; }
     return [{ text: l, callback_data: `v_${x.id}` }];
   });
   btns.push([{ text: '🗑️ 删除模式', callback_data: 'del_mode' }]);
-  sendKb(env, chatId, '📋 点击查看：', btns);
+  await sendKb(env, chatId, '📋 点击查看：', btns);
 }
 
 async function showExpiring(env: Env, chatId: number) {
   const r = await env.DB.prepare(`SELECT id,name,expires_at FROM secrets WHERE expires_at IS NOT NULL AND expires_at<=date('now','+30 days') ORDER BY expires_at`).all<SecretRow>();
-  if (!r.results?.length) return send(env, chatId, '✅ 30天内没有到期');
-  sendKb(env, chatId, '⏰ 即将到期：', r.results.map(x => {
+  if (!r.results?.length) { await send(env, chatId, '✅ 30天内没有到期'); return; }
+  await sendKb(env, chatId, '⏰ 即将到期：', r.results.map(x => {
     const d = Math.ceil((new Date(x.expires_at!).getTime() - Date.now()) / 864e5);
     return [{ text: `${d <= 0 ? '⚠️' : d <= 3 ? '🔴' : d <= 7 ? '🟡' : '🟢'} ${x.name} (${d}天)`, callback_data: `v_${x.id}` }];
   }));
@@ -322,7 +333,7 @@ async function showExpiring(env: Env, chatId: number) {
 
 async function showDetail(env: Env, chatId: number, id: number) {
   const r = await env.DB.prepare('SELECT * FROM secrets WHERE id=?').bind(id).first<SecretRow>();
-  if (!r) return send(env, chatId, '❌ 不存在');
+  if (!r) { await send(env, chatId, '❌ 不存在'); return; }
   let msg: string;
   if (r.site === 'raw') {
     msg = `🔐 ${r.name}\n\n${await decrypt(r.password, env.ENCRYPT_KEY)}`;
@@ -330,12 +341,12 @@ async function showDetail(env: Env, chatId: number, id: number) {
     const [a, p, x] = await Promise.all([decrypt(r.account, env.ENCRYPT_KEY), decrypt(r.password, env.ENCRYPT_KEY), r.extra ? decrypt(r.extra, env.ENCRYPT_KEY) : null]);
     msg = `🔐 ${r.name}\n🌐 ${r.site}\n👤 ${a}\n🔑 ${p}${x ? '\n📝 ' + x : ''}`;
   }
-  sendKb(env, chatId, msg + expiryInfo(r.expires_at), [[{ text: '📅 设置到期', callback_data: `s_${r.id}` }], [{ text: '🗑️ 删除', callback_data: `d_${r.id}` }]]);
+  await sendKb(env, chatId, msg + expiryInfo(r.expires_at), [[{ text: '📅 设置到期', callback_data: `s_${r.id}` }], [{ text: '🗑️ 删除', callback_data: `d_${r.id}` }]]);
 }
 
 async function sendBackup(env: Env, chatId: number) {
   const r = await env.DB.prepare('SELECT * FROM secrets ORDER BY created_at DESC').all<SecretRow>();
-  if (!r.results?.length) return send(env, chatId, '📭 没有数据');
+  if (!r.results?.length) { await send(env, chatId, '📭 没有数据'); return; }
   const data = await Promise.all(r.results.map(async x => {
     if (x.site === 'raw') return { id: x.id, name: x.name, type: 'raw', content: await decrypt(x.password, env.ENCRYPT_KEY), expires_at: x.expires_at };
     const [a, p, e] = await Promise.all([decrypt(x.account, env.ENCRYPT_KEY), decrypt(x.password, env.ENCRYPT_KEY), x.extra ? decrypt(x.extra, env.ENCRYPT_KEY) : null]);
@@ -345,5 +356,5 @@ async function sendBackup(env: Env, chatId: number) {
   fd.append('chat_id', chatId.toString());
   fd.append('document', new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), `backup_${new Date().toISOString().slice(0, 10)}.json`);
   fd.append('caption', `💾 备份 ${data.length} 条\n⚠️ 明文密码，妥善保管！`);
-  fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendDocument`, { method: 'POST', body: fd });
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendDocument`, { method: 'POST', body: fd });
 }
