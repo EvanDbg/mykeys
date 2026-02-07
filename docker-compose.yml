@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  mykeys:
+    build: .
+    container_name: mykeys
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      # 加密密钥 (必须与之前设置的一致)
+      - ENCRYPT_KEY=${ENCRYPT_KEY}
+      
+      # 企业微信配置
+      - WECOM_CORP_ID=${WECOM_CORP_ID}
+      - WECOM_AGENT_ID=${WECOM_AGENT_ID}
+      - WECOM_SECRET=${WECOM_SECRET}
+      - WECOM_TOKEN=${WECOM_TOKEN}
+      - WECOM_ENCODING_AES_KEY=${WECOM_ENCODING_AES_KEY}
+      
+      # Telegram 配置 (可选)
+      # - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      # - ALLOWED_USER_ID=${ALLOWED_USER_ID}
+      
+      # 服务配置
+      - PORT=3000
+      - DATABASE_PATH=/app/data/mykeys.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

@@ -5,7 +5,7 @@ compatibility_date = "2026-02-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "password-bot-db"
-database_id = "0bd6966c-142c-4a9d-81d0-669fdbd17716"
+database_id = "17a5085a-89fd-4c2f-9b3a-a506893b6de2"
 
 # 每天早上 9 点（UTC+8 = UTC 1:00）检查到期提醒
 [triggers]
