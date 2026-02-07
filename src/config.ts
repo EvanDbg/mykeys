@@ -15,6 +15,12 @@ export interface TelegramConfig {
     allowedUserId: string;
 }
 
+export interface AdminConfig {
+    enabled: boolean;
+    username: string;
+    password: string;
+}
+
 export interface AppConfig {
     // 加密密钥
     encryptKey: string;
@@ -30,6 +36,9 @@ export interface AppConfig {
 
     // Telegram 配置
     telegram?: TelegramConfig;
+
+    // 后台管理配置
+    admin?: AdminConfig;
 }
 
 /**
@@ -58,6 +67,15 @@ export function loadConfig(): AppConfig {
         config.telegram = {
             botToken: process.env.TELEGRAM_BOT_TOKEN,
             allowedUserId: process.env.ALLOWED_USER_ID || '',
+        };
+    }
+
+    // 后台管理配置
+    if (process.env.ADMIN_ENABLED === 'true') {
+        config.admin = {
+            enabled: true,
+            username: process.env.ADMIN_USERNAME || 'admin',
+            password: process.env.ADMIN_PASSWORD || '',
         };
     }
 

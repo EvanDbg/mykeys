@@ -3,10 +3,9 @@ node_modules/
 .dev.vars
 .env
 .secrets.json
+.secrets.local
 worker-configuration.d.ts
 wrangler.toml
 backup.sql
-.secrets.local
 dist/
 data/
-.env

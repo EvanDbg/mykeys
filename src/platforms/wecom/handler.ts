@@ -10,23 +10,23 @@ import {
     encryptMessage,
     generateSignature,
     generateNonce,
-} from './crypto';
-import { getAccessToken, sendTextMessage } from './api';
+} from './crypto.js';
+import { getAccessToken, sendTextMessage } from './api.js';
 import {
     PasswordService,
     parseDate,
-} from '../../core/password-service';
-import type { WeComConfig } from '../../config';
-import type { SessionData } from '../../core/storage';
+} from '../../core/password-service.js';
+import type { WeComConfig } from '../../config.js';
+import type { SessionData } from '../../core/storage.js';
 
 const HELP_TEXT = `🔐 密码管理助手
 
-📝 保存：直接发送名称开始引导
-📄 长文本：#存 名称
-内容
-🔍 搜索：发送关键词
-📋 列表：发送 /list
-⏰ 到期：发送 /expiring
+🔍 搜索：直接发送关键词
+➕ 添加：/add 或 /add 名称
+❌ 删除：/del ID
+📄 长文本：#存 名称\n内容
+📋 列表：/list
+⏰ 到期：/expiring
 
 🔒 AES加密 ⏰ 到期提醒`;
 
@@ -71,13 +71,20 @@ export class WeComHandler {
      */
     async handleMessage(req: Request, res: Response): Promise<void> {
         try {
+            // 确保请求体是字符串，并清理 BOM
+            let body = req.body;
+            if (typeof body !== 'string') {
+                body = JSON.stringify(body);
+            }
+            body = body.replace(/^\uFEFF/, '').trim();
+
             const { msg_signature, timestamp, nonce } = req.query as Record<
                 string,
                 string
             >;
 
             // 解析 XML
-            const xmlData = await parseStringPromise(req.body, {
+            const xmlData = await parseStringPromise(body, {
                 explicitArray: false,
             });
             const encryptedMsg = xmlData.xml.Encrypt;
@@ -153,11 +160,18 @@ export class WeComHandler {
      * 处理消息内容
      */
     private async processMessage(msg: WeComMessage): Promise<string | null> {
+        const userId = msg.FromUserName;
+        const userIdNum = parseInt(userId, 10) || this.hashUserId(userId);
+
+        // 处理菜单点击事件
+        if (msg.MsgType === 'event' && msg.Event === 'click') {
+            return await this.handleMenuClick(msg.EventKey || '', userIdNum);
+        }
+
         if (msg.MsgType !== 'text' || !msg.Content) {
             return null;
         }
 
-        const userId = msg.FromUserName;
         const text = msg.Content.trim();
 
         // 命令处理
@@ -166,7 +180,7 @@ export class WeComHandler {
         }
 
         if (text === '/list' || text === '列表') {
-            return await this.handleList();
+            return await this.handleList(userIdNum);
         }
 
         if (text === '/expiring' || text === '到期') {
@@ -174,39 +188,94 @@ export class WeComHandler {
         }
 
         if (text === '/cancel' || text === '取消') {
-            await this.passwordService.clearSession(parseInt(userId, 10) || this.hashUserId(userId));
+            await this.passwordService.clearSession(userIdNum);
             return '✅ 已取消';
         }
 
+        // 添加密码指令：/add 或 /add 名称
+        if (text === '/add' || text === '添加') {
+            await this.passwordService.setSession(userIdNum, { step: 'ask_name' });
+            return '➕ 开始添加密码\n\n📝 请输入名称：';
+        }
+
+        if (text.startsWith('/add ')) {
+            const name = text.slice(5).trim();
+            if (name) {
+                await this.passwordService.setSession(userIdNum, { step: 'ask_site', name });
+                return `📝 保存「${name}」\n\n🌐 请输入网站：`;
+            }
+        }
+
+        // 删除密码指令：/del ID
+        if (text.startsWith('/del ')) {
+            const idStr = text.slice(5).trim();
+            const id = parseInt(idStr, 10);
+            if (!isNaN(id)) {
+                return await this.handleDelete(id);
+            }
+            return '❓ 格式：/del ID\n\n💡 发送 /list 查看 ID';
+        }
+
+        // 长文本保存：#存 名称\n内容
+        if (text.startsWith('#存')) {
+            return await this.handleSaveLongText(text);
+        }
+
         // 获取会话状态
-        const userIdNum = parseInt(userId, 10) || this.hashUserId(userId);
         const session = await this.passwordService.getSession(userIdNum);
 
         if (session.step !== 'idle') {
             return await this.handleFlow(userIdNum, text, session);
         }
 
-        // 长文本保存
-        if (text.startsWith('#存')) {
-            return await this.handleSaveLongText(text);
+        // 默认行为：搜索
+        return await this.handleSearch(text, userIdNum);
+    }
+
+    /**
+     * 处理菜单点击事件
+     */
+    private async handleMenuClick(eventKey: string, userId: number): Promise<string> {
+        switch (eventKey) {
+            case 'CMD_LIST':
+                return await this.handleList(userId);
+            case 'CMD_ADD':
+                await this.passwordService.setSession(userId, { step: 'ask_name' });
+                return '➕ 开始添加密码\n\n📝 请输入名称：';
+            case 'CMD_EXPIRING':
+                return await this.handleExpiring();
+            case 'CMD_HELP':
+                return HELP_TEXT;
+            default:
+                return HELP_TEXT;
+        }
+    }
+
+    /**
+     * 处理搜索
+     */
+    private async handleSearch(text: string, userId?: number): Promise<string> {
+        const results = await this.passwordService.searchSecrets(text);
+
+        if (results.length === 0) {
+            return `🔍 未找到「${text}」\n\n💡 输入 /add ${text} 可新建`;
         }
 
-        // 搜索或新建
-        if (!text.includes(' ') && text.length <= 20) {
-            const results = await this.passwordService.searchSecrets(text);
-            if (results.length > 0) {
-                if (results.length === 1) {
-                    return await this.handleShowDetail(results[0].id);
-                }
-                return `🔍 找到 ${results.length} 条：\n\n${results
-                    .map((x, i) => `${i + 1}. ${x.name} (${x.site})`)
-                    .join('\n')}\n\n回复序号查看详情`;
-            }
+        if (results.length === 1) {
+            return await this.handleShowDetail(results[0].id);
         }
 
-        // 开始新建流程
-        await this.passwordService.setSession(userIdNum, { step: 'ask_site', name: text });
-        return `📝 保存「${text}」\n\n🌐 请输入网站：`;
+        // 保存搜索结果 ID 到 session，等待用户回复序号
+        if (userId !== undefined) {
+            await this.passwordService.setSession(userId, {
+                step: 'picking',
+                pickingIds: results.map(r => r.id),
+            });
+        }
+
+        return `🔍 找到 ${results.length} 条：\n\n${results
+            .map((x, i) => `${i + 1}. ${x.name} (${x.site})`)
+            .join('\n')}\n\n回复序号查看详情`;
     }
 
     /**
@@ -218,6 +287,12 @@ export class WeComHandler {
         session: SessionData
     ): Promise<string> {
         switch (session.step) {
+            case 'ask_name':
+                session.name = text;
+                session.step = 'ask_site';
+                await this.passwordService.setSession(userId, session);
+                return `📝 保存「${text}」\n\n🌐 请输入网站：`;
+
             case 'ask_site':
                 session.site = text;
                 session.step = 'ask_account';
@@ -258,6 +333,17 @@ export class WeComHandler {
                 }
                 return await this.finishSave(userId, session);
 
+            case 'picking':
+                // 处理列表序号选择
+                const num = parseInt(text, 10);
+                if (!isNaN(num) && session.pickingIds && num >= 1 && num <= session.pickingIds.length) {
+                    await this.passwordService.clearSession(userId);
+                    return await this.handleShowDetail(session.pickingIds[num - 1]);
+                }
+                // 不是有效序号，清除状态并当作搜索
+                await this.passwordService.clearSession(userId);
+                return await this.handleSearch(text, userId);
+
             default:
                 return HELP_TEXT;
         }
@@ -289,7 +375,7 @@ export class WeComHandler {
     /**
      * 处理列表命令
      */
-    private async handleList(): Promise<string> {
+    private async handleList(userId?: number): Promise<string> {
         const secrets = await this.passwordService.getAllSecrets();
         if (!secrets.length) {
             return '📭 没有数据';
@@ -306,6 +392,14 @@ export class WeComHandler {
             }
             return `${i + 1}. ${prefix}${x.name} (${x.site})`;
         });
+
+        // 保存列表 ID 到 session，等待用户回复序号
+        if (userId !== undefined) {
+            await this.passwordService.setSession(userId, {
+                step: 'picking',
+                pickingIds: secrets.map(s => s.id),
+            });
+        }
 
         return `📋 共 ${secrets.length} 条：\n\n${lines.join('\n')}\n\n回复序号查看详情`;
     }
@@ -339,14 +433,29 @@ export class WeComHandler {
             return '❌ 不存在';
         }
 
+        const deleteHint = `\n\n🗑️ 删除请发送: /del ${id}`;
+
         if (detail.isRaw) {
-            return `🔐 ${detail.name}\n\n${detail.password}${detail.expiryInfo}`;
+            return `🔐 ${detail.name}\n\n${detail.password}${detail.expiryInfo}${deleteHint}`;
         }
 
         return `🔐 ${detail.name}
 🌐 ${detail.site}
 👤 ${detail.account}
-🔑 ${detail.password}${detail.extra ? '\n📝 ' + detail.extra : ''}${detail.expiryInfo}`;
+🔑 ${detail.password}${detail.extra ? '\n📝 ' + detail.extra : ''}${detail.expiryInfo}${deleteHint}`;
+    }
+
+    /**
+     * 处理删除
+     */
+    private async handleDelete(id: number): Promise<string> {
+        const detail = await this.passwordService.getSecretDetail(id);
+        if (!detail) {
+            return '❌ 该记录不存在';
+        }
+
+        await this.passwordService.deleteSecret(id);
+        return `✅ 已删除「${detail.name}」`;
     }
 
     /**

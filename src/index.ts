@@ -4,10 +4,12 @@
 
 import express from 'express';
 import bodyParser from 'body-parser';
-import { loadConfig, validateConfig } from './config';
-import { SqliteStorage } from './core/storage-sqlite';
-import { PasswordService } from './core/password-service';
-import { WeComHandler } from './platforms/wecom/handler';
+import { loadConfig, validateConfig } from './config.js';
+import { SqliteStorage } from './core/storage-sqlite.js';
+import { PasswordService } from './core/password-service.js';
+import { WeComHandler } from './platforms/wecom/handler.js';
+import { createMenu, getMenu, deleteMenu } from './platforms/wecom/menu.js';
+import { createAdminRouter } from './admin/router.js';
 import path from 'path';
 import fs from 'fs';
 
@@ -46,7 +48,7 @@ async function main() {
 
   // 解析 XML 请求体（企业微信使用 XML）
   app.use(
-    bodyParser.text({ type: ['text/xml', 'application/xml'] })
+    bodyParser.text({ type: ['text/xml', 'application/xml', 'text/plain', '*/*'] })
   );
   app.use(bodyParser.json());
   app.use(bodyParser.urlencoded({ extended: true }));
@@ -55,6 +57,13 @@ async function main() {
   app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
+
+  // 后台管理界面
+  if (config.admin?.enabled) {
+    const adminRouter = createAdminRouter(config.admin, passwordService);
+    app.use('/admin', adminRouter);
+    console.log('✅ 后台管理已启用: /admin');
+  }
 
   // 企业微信回调
   if (config.wecom) {
@@ -67,7 +76,49 @@ async function main() {
       wecomHandler.handleMessage(req, res)
     );
 
+    // 菜单管理 API
+    app.post('/wecom/menu/create', async (req, res) => {
+      const result = await createMenu(config.wecom!);
+      res.json(result);
+    });
+    app.get('/wecom/menu', async (req, res) => {
+      const result = await getMenu(config.wecom!);
+      res.json(result);
+    });
+    app.delete('/wecom/menu', async (req, res) => {
+      const result = await deleteMenu(config.wecom!);
+      res.json(result);
+    });
+
+    // 主动推送消息 API
+    app.post('/wecom/send', async (req, res) => {
+      try {
+        const { userId, content, type = 'text' } = req.body;
+
+        if (!userId || !content) {
+          res.status(400).json({ success: false, error: '缺少 userId 或 content' });
+          return;
+        }
+
+        const { getAccessToken, sendTextMessage, sendMarkdownMessage } = await import('./platforms/wecom/api.js');
+        const accessToken = await getAccessToken(config.wecom!.corpId, config.wecom!.secret);
+
+        if (type === 'markdown') {
+          await sendMarkdownMessage(accessToken, config.wecom!.agentId, userId, content);
+        } else {
+          await sendTextMessage(accessToken, config.wecom!.agentId, userId, content);
+        }
+
+        res.json({ success: true, message: '消息发送成功' });
+      } catch (error) {
+        console.error('发送消息失败:', error);
+        res.status(500).json({ success: false, error: String(error) });
+      }
+    });
+
     console.log('✅ 企业微信回调已配置: /wecom/callback');
+    console.log('✅ 菜单管理 API: POST/GET/DELETE /wecom/menu');
+    console.log('✅ 主动推送 API: POST /wecom/send');
   }
 
   // TODO: Telegram Webhook (如需保留)

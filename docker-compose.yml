@@ -26,6 +26,11 @@ services:
       # 服务配置
       - PORT=3000
       - DATABASE_PATH=/app/data/mykeys.db
+      
+      # 后台管理配置
+      - ADMIN_ENABLED=${ADMIN_ENABLED:-true}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]

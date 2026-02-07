@@ -3,9 +3,9 @@
  * 与具体消息平台解耦
  */
 
-import { encrypt, decrypt } from './crypto';
-import { cleanText, parseDate, expiryInfo } from './utils';
-import type { IStorage, SecretRow, SessionData } from './storage';
+import { encrypt, decrypt } from './crypto.js';
+import { cleanText, parseDate, expiryInfo } from './utils.js';
+import type { IStorage, SecretRow, SessionData } from './storage.js';
 
 export interface SaveSecretInput {
     name: string;
@@ -139,6 +139,40 @@ export class PasswordService {
      */
     async updateExpiry(id: number, expiresAt: string | null): Promise<void> {
         return this.storage.updateSecretExpiry(id, expiresAt);
+    }
+
+    /**
+     * 更新密码条目（支持部分更新）
+     */
+    async updateSecret(
+        id: number,
+        updates: {
+            name?: string;
+            site?: string;
+            account?: string;
+            password?: string;
+            extra?: string | null;
+            expiresAt?: string | null;
+        }
+    ): Promise<void> {
+        const data: Record<string, string | null> = {};
+
+        if (updates.name !== undefined) data.name = updates.name;
+        if (updates.site !== undefined) data.site = updates.site;
+        if (updates.account !== undefined) {
+            data.account = await encrypt(updates.account, this.encryptKey);
+        }
+        if (updates.password !== undefined) {
+            data.password = await encrypt(updates.password, this.encryptKey);
+        }
+        if (updates.extra !== undefined) {
+            data.extra = updates.extra ? await encrypt(updates.extra, this.encryptKey) : null;
+        }
+        if (updates.expiresAt !== undefined) {
+            data.expires_at = updates.expiresAt;
+        }
+
+        return this.storage.updateSecret(id, data);
     }
 
     /**

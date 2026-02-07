@@ -4,7 +4,7 @@
  */
 
 import Database from 'better-sqlite3';
-import type { IStorage, SecretRow, SessionData } from './storage';
+import type { IStorage, SecretRow, SessionData } from './storage.js';
 
 const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 分钟
 
@@ -91,6 +91,46 @@ export class SqliteStorage implements IStorage {
             'UPDATE secrets SET expires_at = ? WHERE id = ?'
         );
         stmt.run(expiresAt, id);
+    }
+
+    async updateSecret(
+        id: number,
+        data: Partial<Omit<import('./storage.js').SecretRow, 'id' | 'created_at'>>
+    ): Promise<void> {
+        const fields: string[] = [];
+        const values: (string | null)[] = [];
+
+        if (data.name !== undefined) {
+            fields.push('name = ?');
+            values.push(data.name);
+        }
+        if (data.site !== undefined) {
+            fields.push('site = ?');
+            values.push(data.site);
+        }
+        if (data.account !== undefined) {
+            fields.push('account = ?');
+            values.push(data.account);
+        }
+        if (data.password !== undefined) {
+            fields.push('password = ?');
+            values.push(data.password);
+        }
+        if (data.extra !== undefined) {
+            fields.push('extra = ?');
+            values.push(data.extra);
+        }
+        if (data.expires_at !== undefined) {
+            fields.push('expires_at = ?');
+            values.push(data.expires_at);
+        }
+
+        if (fields.length === 0) return;
+
+        const stmt = this.db.prepare(
+            `UPDATE secrets SET ${fields.join(', ')} WHERE id = ?`
+        );
+        stmt.run(...values, id);
     }
 
     async deleteSecret(id: number): Promise<void> {

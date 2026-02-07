@@ -21,15 +21,18 @@ export interface SessionData {
     password?: string;
     expiresAt?: string | null;
     extra?: string | null;
+    pickingIds?: number[];  // 列表结果的 ID 数组
 }
 
 export type SessionStep =
     | 'idle'
+    | 'ask_name'
     | 'ask_site'
     | 'ask_account'
     | 'ask_password'
     | 'ask_expiry'
-    | 'ask_extra';
+    | 'ask_extra'
+    | 'picking';
 
 /**
  * 存储层抽象接口
@@ -44,6 +47,7 @@ export interface IStorage {
     searchSecrets(keyword: string, limit?: number): Promise<SecretRow[]>;
     getExpiringSecrets(days: number): Promise<SecretRow[]>;
     saveSecret(data: Omit<SecretRow, 'id' | 'created_at'>): Promise<number>;
+    updateSecret(id: number, data: Partial<Omit<SecretRow, 'id' | 'created_at'>>): Promise<void>;
     updateSecretExpiry(id: number, expiresAt: string | null): Promise<void>;
     deleteSecret(id: number): Promise<void>;
 
